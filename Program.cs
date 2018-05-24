@@ -8,21 +8,35 @@ namespace doubleLockTest
     class Program
     {
         private static bool _testIsRunning = true;
+        private static object _consoleLock = new object();
+
 
         static void Main(string[] args)
         {
             _testIsRunning = true;
             Console.WriteLine("Running test using single lock");
-            RunTest(new ProcessorCacheWithSingleLock());
+            var processorCacheWithSingleLock = new ProcessorCacheWithSingleLock();
+            foreach (var i in Enumerable.Range(0, 10000))
+            {
+                processorCacheWithSingleLock.Add(i, new Processor {Name = i.ToString()});
+            }
+            RunTest(processorCacheWithSingleLock);
 
             //let the threads die
-            Console.WriteLine("waitig 5 secondos for all threads to die");
+            Thread.Sleep(5000);
+            Console.Clear();
+            Console.WriteLine("\nwaitig 5 seconds for all threads to die");
             Thread.Sleep(5000);
             Console.Clear();
 
             _testIsRunning = true;
             Console.WriteLine("Running test using double lock");
-            RunTest(new ProcessorCacheWithDoubleLock());
+            var processorCacheWithDoubleLock = new ProcessorCacheWithDoubleLock();
+            foreach (var i in Enumerable.Range(0, 10000))
+            {
+                processorCacheWithDoubleLock.Add(i, new Processor {Name = i.ToString()});
+            }
+            RunTest(processorCacheWithDoubleLock);
 
             Console.WriteLine("Press [enter] to exit");
             Console.ReadLine();
@@ -30,18 +44,19 @@ namespace doubleLockTest
 
         private static void RunTest(IProcessorCache cache)
         {
-            foreach (var i in Enumerable.Range(0, 10000))
-            {
-                cache.Add(i, new Processor {Name = i.ToString()});
-            }
-
             var readers = Enumerable
                 .Range(0, 20)
-                .Select(x => new Thread(ReadProcessors));
+                .Select(x => new Thread(ReadProcessors))
+                .ToArray();
 
-            foreach (var reader in readers)
+            for (int i = 0; i < readers.Count(); i++)
             {
-                reader.Start(cache);
+                var readerData = new ReaderData
+                {
+                    Cache = cache,
+                    ThreadId = i
+                };
+                readers[i].Start(readerData);
             }
 
             var remover = new Thread(RemoveProessors);
@@ -60,8 +75,13 @@ namespace doubleLockTest
 
         private static void ReadProcessors(object data)
         {
-            Console.WriteLine("reader will try to get the 10th entry");
-            var cache = (IProcessorCache) data;
+            var readerData = (ReaderData) data;
+            var cache = readerData.Cache;
+            lock (_consoleLock)
+            {
+                Console.SetCursorPosition(0, 1 + readerData.ThreadId);
+                Console.WriteLine("reader will try to get the 10th entry");
+            }
 
             while (true)
             {
@@ -75,7 +95,15 @@ namespace doubleLockTest
                 }
                 catch (KeyNotFoundException e)
                 {
-                    Console.WriteLine("the key not found exception was thrown");
+                    var cursorTop = Console.CursorTop;
+                    lock (_consoleLock)
+                    {
+                        Console.SetCursorPosition(0, 1 + readerData.ThreadId);
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("the key not found exception was thrown");
+                        Console.ResetColor();
+                        Console.CursorTop = cursorTop;
+                    }
                     Console.Beep();
                     _testIsRunning = false;
                     break;
@@ -87,6 +115,7 @@ namespace doubleLockTest
             }
         }
 
+
         private static void RemoveProessors(object data)
         {
             Console.WriteLine("remover will remove entries from the cache");
@@ -97,14 +126,23 @@ namespace doubleLockTest
             for (int i = 0; i <= 10000; i++)
             {
                 cache.Remove(i);
-                Console.SetCursorPosition(0, 25);
-                Console.Write($"remover: removed entry: {i,4}, entries left: {cache.Count()}    ");
+                lock (_consoleLock)
+                {
+                    Console.SetCursorPosition(0, 25);
+                    Console.Write($"remover: removed entry: {i,4}, entries left: {cache.Count()}    ");
+                }
             }
 
             _testIsRunning = false;
-            Console.WriteLine("\nthere are no more entreis to remove, the remover will not exit");
+            Console.WriteLine("\nthere are no more entreis to remove, the remover will now exit");
         }
 
+    }
+
+    internal class ReaderData
+    {
+        public IProcessorCache Cache;
+        public int ThreadId;
     }
 
     internal interface IProcessorCache
